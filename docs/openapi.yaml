@@ -1,0 +1,275 @@
+openapi: 3.1.0
+info:
+  title: Link Shortener API
+  version: 1.0.0
+  description: |
+    Shortens URLs and records clicks. All responses are JSON, except the redirect
+    endpoint, which answers with an HTTP 302 and a Location header.
+    Errors always use the Error schema below.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from POST /api/auth/login. Short-lived (default 30 minutes).
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable, machine-readable code.
+              enum: [validation_error, unauthorized, not_found, conflict, internal_error, method_not_allowed]
+            message:
+              type: string
+              description: Human-readable message, safe to show to users.
+      example:
+        error: { code: not_found, message: Link not found. }
+
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 8, maxLength: 128 }
+
+    User:
+      type: object
+      required: [id, email, created_at]
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
+
+    Token:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, enum: [bearer] }
+        expires_in: { type: integer, description: Seconds until the token expires. }
+
+    LinkCreate:
+      type: object
+      required: [target_url]
+      properties:
+        target_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Must start with http:// or https://
+        custom_code:
+          type: [string, "null"]
+          pattern: '^[A-Za-z0-9_-]{3,32}$'
+          description: Optional. If omitted, a random 7-character code is generated.
+
+    Link:
+      type: object
+      required: [id, code, short_url, target_url, created_at, click_count]
+      properties:
+        id: { type: integer }
+        code: { type: string }
+        short_url: { type: string, description: Full public short URL, e.g. https://api.example.com/r/abc1234 }
+        target_url: { type: string }
+        created_at: { type: string, format: date-time }
+        click_count: { type: integer, minimum: 0 }
+
+    LinkList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+        total: { type: integer, description: Total links owned by the user. }
+
+    DailyClicks:
+      type: object
+      required: [date, clicks]
+      properties:
+        date: { type: string, format: date, description: UTC date. }
+        clicks: { type: integer, minimum: 0 }
+
+    ReferrerClicks:
+      type: object
+      required: [referrer, clicks]
+      properties:
+        referrer: { type: string, description: Referrer host, or "direct" if none was sent. }
+        clicks: { type: integer, minimum: 0 }
+
+    LinkStats:
+      type: object
+      required: [link_id, total_clicks, window_clicks, days, daily, top_referrers]
+      properties:
+        link_id: { type: integer }
+        total_clicks: { type: integer, description: All-time clicks. }
+        window_clicks: { type: integer, description: Clicks within the last `days` days. }
+        days: { type: integer, description: Size of the window used for daily and top_referrers. }
+        daily:
+          type: array
+          description: One entry per UTC day in the window, oldest first, including zero days.
+          items: { $ref: '#/components/schemas/DailyClicks' }
+        top_referrers:
+          type: array
+          description: Up to 5 referrers in the window, most clicks first.
+          items: { $ref: '#/components/schemas/ReferrerClicks' }
+
+  responses:
+    ValidationError:
+      description: Request body, path or query parameter failed validation.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing, invalid or expired token (or wrong credentials on login).
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource doesn't exist or isn't owned by the caller.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Unique value already taken.
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  parameters:
+    LinkId:
+      name: link_id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties: { status: { type: string, enum: [ok] } }
+
+  /api/auth/register:
+    post:
+      summary: Create an account
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } }
+      responses:
+        '201':
+          description: Account created.
+          content: { application/json: { schema: { $ref: '#/components/schemas/User' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/auth/login:
+    post:
+      summary: Exchange credentials for an access token
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Credentials' } } }
+      responses:
+        '200':
+          description: Logged in.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/auth/me:
+    get:
+      summary: Current user
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The signed-in user.
+          content: { application/json: { schema: { $ref: '#/components/schemas/User' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/links:
+    get:
+      summary: List the caller's links, newest first
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: The caller's links.
+          content: { application/json: { schema: { $ref: '#/components/schemas/LinkList' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    post:
+      summary: Create a short link
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LinkCreate' } } }
+      responses:
+        '201':
+          description: Link created.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Link' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/links/{link_id}:
+    parameters: [{ $ref: '#/components/parameters/LinkId' }]
+    get:
+      summary: Get one of the caller's links
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The link.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Link' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      summary: Delete one of the caller's links (and its clicks)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/links/{link_id}/stats:
+    parameters: [{ $ref: '#/components/parameters/LinkId' }]
+    get:
+      summary: Click statistics for one of the caller's links
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 90, default: 30 } }
+      responses:
+        '200':
+          description: Stats.
+          content: { application/json: { schema: { $ref: '#/components/schemas/LinkStats' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /r/{code}:
+    get:
+      summary: Follow a short link (public)
+      description: Records a click, then redirects. Uses 302 (not 301) so browsers don't cache it and every click reaches the server.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{3,32}$' } }
+      responses:
+        '302':
+          description: Redirect to the target URL.
+          headers:
+            Location: { schema: { type: string } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
