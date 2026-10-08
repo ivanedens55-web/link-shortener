@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shortener_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway passwords for a disposable CI container, not real secrets.
+      PGPASSWORD: postgres
+      TEST_DATABASE_URL: postgresql://shortener_app:ci-only-password@localhost:5432/shortener_test
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shortener_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply schema as the owner
+        run: |
+          psql -h localhost -U postgres -d shortener_test -v ON_ERROR_STOP=1 -f db/schema.sql
+          psql -h localhost -U postgres -d shortener_test -c "alter role shortener_app with login password 'ci-only-password';"
+      - name: Run tests
+        working-directory: backend
+        run: |
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
