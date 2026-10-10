@@ -2,7 +2,7 @@
 
 Turns long URLs into short links and counts every click. Users sign in, create and manage their own links, and see a per-link stats page with daily clicks and top referrers. The backend handles the redirect itself, so every click is recorded in the database before the visitor is sent on.
 
-**Live demo:** frontend `https://<your-app>.vercel.app` · API `https://<your-api>.onrender.com/health`
+**Live demo:** https://link-shortener-phi-swart.vercel.app · API: https://link-shortener-api-oyvc.onrender.com/health   
 (The API runs on Render's free tier and sleeps when idle: the first request can take ~50 seconds.)
 
 ## Features
@@ -189,6 +189,7 @@ Then put the final Vercel URL in Render's `CORS_ORIGINS` and redeploy the backen
 - No refresh tokens: you're signed out after 30 minutes or when the tab closes.
 - A missing short link returns a JSON 404 rather than a friendly web page.
 - Click counts use `count(*)` per request; fine at portfolio scale, would need a counter or rollup table at high volume.
+- The free Supabase project pauses after about a week of inactivity; the demo fails until it's restored from the dashboard.
 
 ## Future improvements
 
